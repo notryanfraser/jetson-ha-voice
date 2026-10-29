@@ -1,0 +1,99 @@
+---
+- name: Read the installed Ollama version
+  ansible.builtin.command: ollama -v
+  register: ollama_installed_version
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+# The official installer detects JetPack and adds Ollama's CUDA libraries for it.
+- name: Download the Ollama installer
+  ansible.builtin.get_url:
+    url: https://ollama.com/install.sh
+    dest: /tmp/ollama-install.sh
+    mode: "0755"
+  when: ollama_version not in ollama_installed_version.stdout | default('')
+
+- name: Install Ollama
+  ansible.builtin.command: /tmp/ollama-install.sh
+  environment:
+    OLLAMA_VERSION: "{{ ollama_version }}"
+  when: ollama_version not in ollama_installed_version.stdout | default('')
+  changed_when: true
+  notify: Restart ollama
+
+# Settings go in an override, not the unit: the installer rewrites ollama.service.
+- name: Create the override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/ollama.service.d
+    state: directory
+    mode: "0755"
+
+- name: Configure Ollama
+  ansible.builtin.template:
+    src: override.conf.j2
+    dest: /etc/systemd/system/ollama.service.d/override.conf
+    mode: "0644"
+  notify: Restart ollama
+
+- name: Enable Ollama
+  ansible.builtin.systemd_service:
+    name: ollama.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply changed Ollama settings before pulling
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the Ollama API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/version
+  register: ollama_api_ready
+  check_mode: false
+  until: ollama_api_ready.status == 200
+  retries: 30
+  delay: 2
+
+- name: List the models Ollama has
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/tags
+  register: ollama_tags_list
+  check_mode: false
+
+- name: Pull models
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/pull
+    method: POST
+    body_format: json
+    body: {model: "{{ item }}", stream: false}
+    timeout: 3600
+  loop: "{{ [ollama_model] + ollama_extra_models }}"
+  when: item not in (ollama_tags_list.json.models | map(attribute='name') | list)
+  changed_when: true
+
+- name: Create the preload's data directory
+  ansible.builtin.file:
+    path: /var/lib/ollama-preload
+    state: directory
+    mode: "0755"
+
+- name: Install the preload script
+  ansible.builtin.template:
+    src: ollama-preload.sh.j2
+    dest: /usr/local/bin/ollama-preload.sh
+    mode: "0755"
+  notify: Run the preload
+
+- name: Install the preload service
+  ansible.builtin.template:
+    src: ollama-preload.service.j2
+    dest: /etc/systemd/system/ollama-preload.service
+    mode: "0644"
+  notify: Run the preload
+
+- name: Enable the preload at boot
+  ansible.builtin.systemd_service:
+    name: ollama-preload.service
+    enabled: "{{ ollama_preload }}"
+    daemon_reload: true

@@ -1,0 +1,6 @@
+---
+- name: Restart wyoming-phonon
+  ansible.builtin.systemd_service:
+    name: wyoming-phonon.service
+    state: restarted
+    daemon_reload: true

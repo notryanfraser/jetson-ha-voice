@@ -1,0 +1,13 @@
+---
+- name: Restart ollama
+  ansible.builtin.systemd_service:
+    name: ollama.service
+    state: restarted
+    daemon_reload: true
+
+- name: Run the preload
+  ansible.builtin.systemd_service:
+    name: ollama-preload.service
+    state: restarted
+    daemon_reload: true
+  when: ollama_preload

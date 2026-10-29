@@ -1,0 +1,11 @@
+# Copy to inventory/hosts.yml (gitignored) and set your Jetson's address and login.
+all:
+  children:
+    jetson:
+      hosts:
+        jetson-voice:
+          ansible_host: 192.168.1.50
+          ansible_user: ubuntu
+          # Optional per-host overrides, for example:
+          # jetson_timezone: America/Chicago
+          # phonon_voice: Hugh

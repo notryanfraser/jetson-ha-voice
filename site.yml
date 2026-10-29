@@ -1,0 +1,18 @@
+---
+# Set up a Jetson Orin Nano as a local voice server for Home Assistant:
+# whisper.cpp speech-to-text, Phonon text-to-speech and an Ollama LLM, all on the Wyoming
+# and Ollama protocols Home Assistant already speaks.
+- name: Jetson Orin Nano voice server for Home Assistant
+  hosts: jetson
+  become: true
+  roles:
+    - role: system
+      tags: [system]
+    - role: whisper_cpp
+      tags: [stt, whisper]
+    - role: wyoming_whisper
+      tags: [stt, whisper]
+    - role: phonon
+      tags: [tts, phonon]
+    - role: ollama
+      tags: [llm, ollama]

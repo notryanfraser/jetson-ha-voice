@@ -1,0 +1,66 @@
+---
+- name: Create Phonon's virtualenv
+  ansible.builtin.pip:
+    name:
+      - "ptts=={{ phonon_ptts_version }}"
+      - "wyoming=={{ wyoming_version }}"
+      - "numpy=={{ phonon_numpy_version }}"
+    virtualenv: "{{ voice_base_dir }}/wyoming-phonon-venv"
+    virtualenv_command: python3 -m venv
+  become: true
+  become_user: "{{ voice_user }}"
+  notify: Restart wyoming-phonon
+
+- name: Install the Wyoming TTS server
+  ansible.builtin.copy:
+    src: wyoming_phonon.py
+    dest: "{{ voice_base_dir }}/wyoming_phonon.py"
+    owner: "{{ voice_user }}"
+    group: "{{ voice_user }}"
+    mode: "0644"
+  notify: Restart wyoming-phonon
+
+# The service runs offline, so the model and voices are downloaded once here.
+- name: Download the Phonon model and voices
+  ansible.builtin.command:
+    argv:
+      - "{{ voice_base_dir }}/wyoming-phonon-venv/bin/python"
+      - -c
+      - |
+        import sys, ptts
+        model, quant, catalog, voices = sys.argv[1:5]
+        tts = ptts.TTS(model, lang="en", quant=quant, voice_catalog=catalog)
+        for voice in voices.split(","):
+            tts.synth("Hello.", voice=voice)
+        ptts.catalog_voices(catalog)
+        open(sys.argv[5], "w").write("ok\n")
+      - "{{ phonon_model }}"
+      - "{{ phonon_quant }}"
+      - "{{ phonon_voice_catalog }}"
+      - "{{ phonon_voices | join(',') }}"
+      - "{{ phonon_marker }}"
+    creates: "{{ phonon_marker }}"
+  environment:
+    HF_HOME: "{{ voice_base_dir }}/phonon-hf"
+    HF_HUB_DISABLE_XET: "1"
+  vars:
+    phonon_voices: "{{ [phonon_voice] + phonon_extra_voices }}"
+    phonon_fetch_key: "{{ phonon_model ~ phonon_quant ~ phonon_voice_catalog ~ (phonon_voices | join(',')) }}"
+    phonon_marker: "{{ voice_base_dir }}/phonon-hf/.fetched-{{ phonon_fetch_key | hash('sha1') }}"
+  become: true
+  become_user: "{{ voice_user }}"
+  notify: Restart wyoming-phonon
+
+- name: Install the Wyoming TTS service
+  ansible.builtin.template:
+    src: wyoming-phonon.service.j2
+    dest: /etc/systemd/system/wyoming-phonon.service
+    mode: "0644"
+  notify: Restart wyoming-phonon
+
+- name: Enable Phonon
+  ansible.builtin.systemd_service:
+    name: wyoming-phonon.service
+    enabled: true
+    state: started
+    daemon_reload: true

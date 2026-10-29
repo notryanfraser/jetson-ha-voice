@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Load {{ ollama_model }} into GPU memory once Ollama, whisper.cpp and Phonon are up
+After=ollama.service whisper-cpp-server.service wyoming-phonon.service network-online.target
+Requires=ollama.service
+Wants=whisper-cpp-server.service wyoming-phonon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ollama-preload.sh
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

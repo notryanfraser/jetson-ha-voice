@@ -1,0 +1,56 @@
+---
+# Everything here can be overridden per host in your inventory. Defaults reproduce the
+# setup this playbook was built from (JetPack 6.2.3, Orin Nano Super 8 GB, NVMe).
+
+# The account the services run as, and where they are installed.
+voice_user: "{{ ansible_user }}"
+voice_base_dir: /opt/ha-voice
+
+# --- System -------------------------------------------------------------------------
+jetson_power_mode: MAXN_SUPER      # looked up by name in /etc/nvpmodel.conf
+jetson_lock_clocks: true           # run jetson_clocks at boot
+jetson_fan_profile: cool           # quiet, cool or maxN
+jetson_headless: true              # boot to text mode; frees about 800 MB of shared RAM
+jetson_disable_services:           # skipped if not installed
+  - snapd.service
+  - snapd.socket
+  - ModemManager.service
+  - bluetooth.service
+  - nvargus-daemon.service         # CSI camera daemon
+jetson_mask_services:
+  - packagekit.service
+jetson_swap_file: /swapfile        # replaces zram, which takes RAM the GPU needs
+jetson_swap_size_mb: 4096
+jetson_swappiness: 10
+jetson_journal_max_use: 200M
+jetson_timezone: ""                # e.g. America/Chicago; empty leaves it alone
+
+# --- Speech-to-text: whisper.cpp ----------------------------------------------------
+whisper_cpp_repo: https://github.com/ggml-org/whisper.cpp.git
+whisper_cpp_version: 284029c07012d2000941a08d38a31ffb71f4734e
+whisper_cpp_cuda_arch: "87"        # Orin
+whisper_model: small.en
+whisper_model_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{{ whisper_model }}.bin"
+whisper_model_checksum: "sha256:c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"
+whisper_threads: 4
+whisper_server_port: 8910          # local only; the Wyoming bridge talks to it
+whisper_extra_args: "--suppress-nst"  # drops non-speech tokens such as "*Ding*"
+wyoming_whisper_port: 10300
+wyoming_version: "1.8.0"
+
+# --- Text-to-speech: Phonon ---------------------------------------------------------
+phonon_port: 10200
+phonon_voice: Maeve
+phonon_extra_voices: []           # more voices to download, e.g. [Hugh, Captain Silas Blackwater]
+phonon_quant: q8
+phonon_ptts_version: "0.5.0"
+phonon_numpy_version: "2.2.6"
+phonon_model: "hf://gradium/phonon-31m-en@92741c5b07d085ff840e26fea8ce43110b87852f"
+phonon_voice_catalog: "hf://gradium/phonon-voices@da6c9ec0d47be8df5c87c730a3aa97187f3229c3"
+
+# --- LLM: Ollama --------------------------------------------------------------------
+ollama_version: "0.40.12"
+ollama_model: qwen3:4b-instruct-2507-q4_K_M
+ollama_context: 8192               # set Home Assistant's Ollama "Context window size" to the same
+ollama_extra_models: []            # pulled but not preloaded
+ollama_preload: true               # load the model at boot, fully on the GPU

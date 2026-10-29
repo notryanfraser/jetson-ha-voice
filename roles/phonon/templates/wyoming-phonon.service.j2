@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Wyoming TTS server for Phonon, voice {{ phonon_voice }} (port {{ phonon_port }}, used by Home Assistant)
+After=network-online.target
+
+[Service]
+User={{ voice_user }}
+WorkingDirectory={{ voice_base_dir }}
+Environment=HF_HOME={{ voice_base_dir }}/phonon-hf
+Environment=HF_HUB_OFFLINE=1
+ExecStart={{ voice_base_dir }}/wyoming-phonon-venv/bin/python {{ voice_base_dir }}/wyoming_phonon.py --uri tcp://0.0.0.0:{{ phonon_port }} --model {{ phonon_model }} --quant {{ phonon_quant }} --voice-catalog {{ phonon_voice_catalog }} --voice {{ phonon_voice }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

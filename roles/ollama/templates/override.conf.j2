@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Service]
+# llama-server's prompt cache in RAM: on, each idle prompt is kept in RAM and the OOM killer takes Ollama
+Environment="LLAMA_ARG_CACHE_RAM=0"
+Environment="OLLAMA_HOST=0.0.0.0"
+Environment="OLLAMA_KEEP_ALIVE=-1"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"

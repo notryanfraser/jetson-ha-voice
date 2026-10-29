@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=whisper.cpp server ({{ whisper_model }}, CUDA) on 127.0.0.1:{{ whisper_server_port }}
+After=network.target
+
+[Service]
+User={{ voice_user }}
+WorkingDirectory={{ voice_base_dir }}/whisper.cpp
+ExecStart={{ voice_base_dir }}/whisper.cpp/build/bin/whisper-server -m {{ voice_base_dir }}/whisper.cpp/models/ggml-{{ whisper_model }}.bin --host 127.0.0.1 --port {{ whisper_server_port }} -t {{ whisper_threads }} {{ whisper_extra_args }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Wyoming STT bridge to whisper.cpp (port {{ wyoming_whisper_port }}, used by Home Assistant)
+After=whisper-cpp-server.service
+Requires=whisper-cpp-server.service
+
+[Service]
+User={{ voice_user }}
+WorkingDirectory={{ voice_base_dir }}
+ExecStart={{ voice_base_dir }}/wyoming-whispercpp-venv/bin/python {{ voice_base_dir }}/wyoming_whispercpp.py --uri tcp://0.0.0.0:{{ wyoming_whisper_port }} --server http://127.0.0.1:{{ whisper_server_port }}/inference --model {{ whisper_model }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

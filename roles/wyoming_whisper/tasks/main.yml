@@ -1,0 +1,32 @@
+---
+- name: Create the Wyoming STT bridge's virtualenv
+  ansible.builtin.pip:
+    name: "wyoming=={{ wyoming_version }}"
+    virtualenv: "{{ voice_base_dir }}/wyoming-whispercpp-venv"
+    virtualenv_command: python3 -m venv
+  become: true
+  become_user: "{{ voice_user }}"
+  notify: Restart wyoming-whispercpp
+
+- name: Install the Wyoming STT bridge
+  ansible.builtin.copy:
+    src: wyoming_whispercpp.py
+    dest: "{{ voice_base_dir }}/wyoming_whispercpp.py"
+    owner: "{{ voice_user }}"
+    group: "{{ voice_user }}"
+    mode: "0644"
+  notify: Restart wyoming-whispercpp
+
+- name: Install the Wyoming STT service
+  ansible.builtin.template:
+    src: wyoming-whispercpp.service.j2
+    dest: /etc/systemd/system/wyoming-whispercpp.service
+    mode: "0644"
+  notify: Restart wyoming-whispercpp
+
+- name: Enable the Wyoming STT bridge
+  ansible.builtin.systemd_service:
+    name: wyoming-whispercpp.service
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,54 @@
+---
+- name: Check out whisper.cpp
+  ansible.builtin.git:
+    repo: "{{ whisper_cpp_repo }}"
+    dest: "{{ voice_base_dir }}/whisper.cpp"
+    version: "{{ whisper_cpp_version }}"
+    force: false
+  become: true
+  become_user: "{{ voice_user }}"
+  register: whisper_cpp_src
+
+# The slowest step of a first run: most of it is compiling the CUDA kernels.
+- name: Build whisper-server with CUDA
+  ansible.builtin.shell: |
+    set -e
+    rm -rf build
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES={{ whisper_cpp_cuda_arch }} -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release -j {{ ansible_processor_nproc }} --target whisper-server
+  args:
+    chdir: "{{ voice_base_dir }}/whisper.cpp"
+    executable: /bin/bash
+    creates: "{{ omit if whisper_cpp_src is changed else voice_base_dir ~ '/whisper.cpp/build/bin/whisper-server' }}"
+  environment:
+    PATH: "/usr/local/cuda/bin:{{ ansible_env.PATH }}"
+    CUDACXX: /usr/local/cuda/bin/nvcc
+  become: true
+  become_user: "{{ voice_user }}"
+  async: 5400
+  poll: 30
+  notify: Restart whisper-cpp-server
+
+- name: Download the Whisper model
+  ansible.builtin.get_url:
+    url: "{{ whisper_model_url }}"
+    dest: "{{ voice_base_dir }}/whisper.cpp/models/ggml-{{ whisper_model }}.bin"
+    checksum: "{{ whisper_model_checksum | default(omit, true) }}"
+    mode: "0644"
+  become: true
+  become_user: "{{ voice_user }}"
+  notify: Restart whisper-cpp-server
+
+- name: Install the whisper-server service
+  ansible.builtin.template:
+    src: whisper-cpp-server.service.j2
+    dest: /etc/systemd/system/whisper-cpp-server.service
+    mode: "0644"
+  notify: Restart whisper-cpp-server
+
+- name: Enable whisper-server
+  ansible.builtin.systemd_service:
+    name: whisper-cpp-server.service
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,184 @@
+---
+- name: Read the board model
+  ansible.builtin.slurp:
+    src: /proc/device-tree/model
+  register: system_board_model
+
+- name: Read the L4T release
+  ansible.builtin.slurp:
+    src: /etc/nv_tegra_release
+  register: system_l4t_release
+
+- name: Check this is a Jetson Orin Nano on JetPack 6 (L4T R36)
+  ansible.builtin.assert:
+    that:
+      - "'Orin Nano' in (system_board_model.content | b64decode)"
+      - "'R36' in (system_l4t_release.content | b64decode)"
+    fail_msg: >-
+      This playbook targets a Jetson Orin Nano on JetPack 6.x (L4T R36). Found
+      "{{ system_board_model.content | b64decode | replace('\u0000', '') }}" /
+      "{{ (system_l4t_release.content | b64decode).splitlines() | first }}".
+    quiet: true
+
+- name: Install build tools and Python
+  ansible.builtin.apt:
+    name: [git, cmake, build-essential, curl, ca-certificates, python3-venv, python3-pip, tcpdump]
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+# Power and clocks -------------------------------------------------------------------
+- name: Find the power mode's id in nvpmodel.conf
+  ansible.builtin.shell: >-
+    set -o pipefail;
+    grep -oP '^< POWER_MODEL ID=\K[0-9]+(?= NAME={{ jetson_power_mode }} >)' /etc/nvpmodel.conf
+  args:
+    executable: /bin/bash
+  register: system_power_mode_id
+  changed_when: false
+  check_mode: false
+
+- name: Read the current power mode
+  ansible.builtin.command: nvpmodel -q
+  register: system_power_mode_now
+  changed_when: false
+  check_mode: false
+
+# nvpmodel asks before rebooting when a mode needs it; answer no and say so instead.
+- name: Set the power mode
+  ansible.builtin.command: "nvpmodel -m {{ system_power_mode_id.stdout }}"
+  args:
+    stdin: "NO"
+  when: jetson_power_mode not in system_power_mode_now.stdout
+  register: system_power_mode_set
+  changed_when: true
+
+- name: Say a reboot is needed for the power mode
+  ansible.builtin.debug:
+    msg: "The {{ jetson_power_mode }} power mode takes effect after a reboot."
+  when: system_power_mode_set is changed and 'reboot' in (system_power_mode_set.stdout ~ system_power_mode_set.stderr) | lower
+
+- name: Install the jetson_clocks boot service
+  ansible.builtin.copy:
+    src: jetson-clocks.service
+    dest: /etc/systemd/system/jetson-clocks.service
+    mode: "0644"
+  when: jetson_lock_clocks
+
+- name: Enable jetson_clocks at boot
+  ansible.builtin.systemd_service:
+    name: jetson-clocks.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: jetson_lock_clocks
+
+- name: Set the fan profile
+  ansible.builtin.lineinfile:
+    path: /etc/nvfancontrol.conf
+    regexp: '^(\s*)FAN_DEFAULT_PROFILE\s'
+    line: '\1FAN_DEFAULT_PROFILE {{ jetson_fan_profile }}'
+    backrefs: true
+  notify: Restart nvfancontrol
+
+# Free memory: everything here shares the 8 GB with the GPU ---------------------------
+- name: Read the default boot target
+  ansible.builtin.command: systemctl get-default  # noqa: command-instead-of-module
+  register: system_default_target
+  changed_when: false
+  check_mode: false
+
+- name: Boot to text mode
+  ansible.builtin.command: systemctl set-default multi-user.target  # noqa: command-instead-of-module
+  when: jetson_headless and system_default_target.stdout != 'multi-user.target'
+  changed_when: true
+
+- name: Find installed units
+  ansible.builtin.command: systemctl list-unit-files --no-legend --no-pager  # noqa: command-instead-of-module
+  register: system_unit_files
+  changed_when: false
+  check_mode: false
+
+- name: Disable services the voice server does not use
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ jetson_disable_services }}"
+  when: system_unit_files.stdout is search('^' ~ (item | regex_escape) ~ '\s', multiline=True)
+
+- name: Mask services that would otherwise be started on demand
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+    state: stopped
+  loop: "{{ jetson_mask_services }}"
+  when: system_unit_files.stdout is search('^' ~ (item | regex_escape) ~ '\s', multiline=True)
+
+# Swap: a file on disk instead of zram ------------------------------------------------
+- name: Turn off zram swap
+  ansible.builtin.systemd_service:
+    name: nvzramconfig.service
+    enabled: false
+    state: stopped
+  when: system_unit_files.stdout is search('^nvzramconfig\.service\s', multiline=True)
+  notify: Remove zram swap devices
+
+- name: Create the swap file
+  ansible.builtin.shell: |
+    set -e
+    fallocate -l {{ jetson_swap_size_mb }}M {{ jetson_swap_file }}
+    chmod 600 {{ jetson_swap_file }}
+    mkswap {{ jetson_swap_file }}
+  args:
+    creates: "{{ jetson_swap_file }}"
+
+- name: Add the swap file to fstab
+  ansible.posix.mount:
+    src: "{{ jetson_swap_file }}"
+    path: none
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: Read active swap
+  ansible.builtin.command: swapon --show=NAME --noheadings
+  register: system_swap_active
+  changed_when: false
+  check_mode: false
+
+- name: Turn on the swap file
+  ansible.builtin.command: "swapon {{ jetson_swap_file }}"
+  when: jetson_swap_file not in system_swap_active.stdout_lines
+  changed_when: true
+
+- name: Set swappiness
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "{{ jetson_swappiness }}"
+    sysctl_file: /etc/sysctl.d/90-swappiness.conf
+    reload: true
+
+# Logs and time -----------------------------------------------------------------------
+- name: Keep a persistent, capped journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/persistent.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse={{ jetson_journal_max_use }}
+    mode: "0644"
+  notify: Restart journald
+
+- name: Set the time zone
+  community.general.timezone:
+    name: "{{ jetson_timezone }}"
+  when: jetson_timezone | length > 0
+
+- name: Create the install directory
+  ansible.builtin.file:
+    path: "{{ voice_base_dir }}"
+    state: directory
+    owner: "{{ voice_user }}"
+    group: "{{ voice_user }}"
+    mode: "0755"

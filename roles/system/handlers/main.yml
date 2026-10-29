@@ -1,0 +1,32 @@
+---
+# A changed default profile applies only once the saved fan state is cleared.
+- name: Stop nvfancontrol
+  ansible.builtin.systemd_service:
+    name: nvfancontrol
+    state: stopped
+  listen: Restart nvfancontrol
+
+- name: Clear the saved fan state
+  ansible.builtin.file:
+    path: /var/lib/nvfancontrol/status
+    state: absent
+  listen: Restart nvfancontrol
+
+- name: Start nvfancontrol
+  ansible.builtin.systemd_service:
+    name: nvfancontrol
+    state: started
+  listen: Restart nvfancontrol
+
+- name: Remove zram swap devices
+  ansible.builtin.shell: |
+    set -o pipefail
+    for d in $(swapon --show=NAME --noheadings | grep zram || true); do swapoff "$d"; done
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Restart journald
+  ansible.builtin.systemd_service:
+    name: systemd-journald
+    state: restarted
