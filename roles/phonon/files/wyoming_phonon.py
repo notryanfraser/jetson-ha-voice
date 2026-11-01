@@ -107,7 +107,13 @@ class Handler(AsyncEventHandler):
             job = loop.run_in_executor(None, produce)
             while (chunk := await queue.get()) is not None:
                 await self.write_event(AudioChunk(rate=rate, width=2, channels=1, audio=chunk).event())
-            await job
+            try:
+                await job
+            except ValueError as err:
+                # Phonon drops what it cannot say, so a lone emoji ("Goodbye! 😊") is empty text. Skip
+                # it: raising here ended the request without AudioStop and the satellite hung.
+                _LOGGER.debug("Skipped %r: %s", text, err)
+                return
         _LOGGER.debug("Spoke: %s", text)
 
     async def finish(self) -> None:
