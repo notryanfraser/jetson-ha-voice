@@ -14,11 +14,60 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 from wyoming.tts import Synthesize, SynthesizeChunk, SynthesizeStart, SynthesizeStop, SynthesizeStopped
 
 _LOGGER = logging.getLogger("wyoming_phonon")
-_SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+")
+# A sentence ends at punctuation, then space, then more text, but never after an abbreviation:
+# "St. Louis" was two sentences, with a long pause after "St.".
+_SENTENCE_END = re.compile(
+    r"(?<!\bSt\.)(?<!\bMt\.)(?<!\bFt\.)(?<!\bMr\.)(?<!\bMrs\.)(?<!\bDr\.)(?<=[.!?…])[\"')\]]*\s+(?=\S)"
+)
+_ABBREVIATION = re.compile(r"\b(St|Mt|Ft|Mr|Mrs|Dr)\b\.?")
+_NEXT_WORD = re.compile(r"\s+([A-Za-z][\w'’]*)(?=[^\w'’])")
+_PREV_WORD = re.compile(r"(^|[.!?…]\s*|\s)([\w'’]+)\s+$")
+# Spoken before a capitalised word, unless they follow a street name.
+_SPOKEN = {"Mt": "Mount", "Ft": "Fort", "Mr": "Mister", "Mrs": "Missus", "Dr": "Doctor"}
+_ROAD = {"St": "Street", "Dr": "Drive"}
+# Phonon reads "St." as Saint everywhere, so Street has to be decided here.
+_SAINTS = {
+    "louis", "charles", "clair", "paul", "peter", "peters", "petersburg", "joseph", "jude", "mary", "marys",
+    "patrick", "patricks", "anne", "ann", "john", "johns", "francis", "vincent", "thomas", "george", "luke",
+    "lukes", "augustine", "lucia", "kitts", "croix", "cloud", "andrew", "andrews", "michael", "michaels", "jacob",
+    "elizabeth", "elizabeths", "genevieve", "rose", "teresa", "anthony", "anthonys", "nicholas", "james",
+}
 
 
-def split_sentences(text: str) -> tuple[list[str], str]:
+def _after_street_name(before: str) -> bool:
+    """Whether the text ends in a street name or number: Main, 100 Market, 5th. A capital that
+    only starts a sentence ("The") does not count."""
+    prev = _PREV_WORD.search(before)
+    if not prev:
+        return False
+    starts_sentence = prev[1] == "" or prev[1].strip() != ""
+    return prev[2][0].isdigit() or (prev[2][0].isupper() and not starts_sentence)
+
+
+def expand_abbreviations(text: str, final: bool) -> str:
+    """Spell out abbreviations once the word after them is complete, or at the end of the text."""
+
+    def replace(m: re.Match) -> str:
+        nxt = _NEXT_WORD.match(text, m.end())
+        if not nxt and not final:
+            return m[0]  # the next word is still arriving
+        word = nxt[1] if nxt else None
+        capital = bool(word) and word[0].isupper()
+        if m[1] == "St" and word and word.lower().replace("'s", "").replace("’s", "") in _SAINTS:
+            return "Saint"  # St. Louis, East St. Louis, Lake St. Louis
+        if m[1] in _ROAD and (_after_street_name(text[: m.start()]) or (m[1] == "St" and not capital)):
+            ends = m[0].endswith(".") and (not word or capital)
+            return _ROAD[m[1]] + ("." if ends else "")  # "Main St. Bring a jacket." stays two sentences
+        if m[1] == "St":
+            return "Saint"
+        return _SPOKEN[m[1]] if capital else m[0]
+
+    return _ABBREVIATION.sub(replace, text)
+
+
+def split_sentences(text: str, final: bool = False) -> tuple[list[str], str]:
     """Complete sentences in text, and the unfinished rest."""
+    text = expand_abbreviations(text, final)
     parts = _SENTENCE_END.split(text)
     return [p.strip() for p in parts[:-1] if p.strip()], parts[-1]
 
@@ -85,7 +134,7 @@ class Handler(AsyncEventHandler):
                 return True  # HA sends the whole text again after a stream, for older servers
             synth = Synthesize.from_event(event)
             self.voice = self.pick_voice(synth.voice)
-            sentences, rest = split_sentences(synth.text)
+            sentences, rest = split_sentences(synth.text, final=True)
             for s in sentences + [rest]:
                 await self.speak(s)
             await self.finish()
@@ -102,7 +151,7 @@ class Handler(AsyncEventHandler):
                 await self.speak(s)
             return True
         if SynthesizeStop.is_type(event.type):
-            await self.speak(self.pending)
+            await self.speak(expand_abbreviations(self.pending, final=True))
             self.pending = ""
             await self.finish()
             await self.write_event(SynthesizeStopped().event())
